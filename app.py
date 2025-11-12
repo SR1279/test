@@ -10,7 +10,7 @@ from decimal import Decimal, ROUND_HALF_UP
 app = Flask(__name__)
 
 URL = "https://platform-v2.ridges.ai/retrieval/top-agents"
-PARAMS = {"number_of_agents": 20}
+PARAMS = {"number_of_agents": 50}
 
 # Global variables to store data in memory
 agents_data = {}  # {agent_id: score}
@@ -171,3 +171,4 @@ if __name__ == "__main__":
 
     # Run Flask web server
     app.run(host="0.0.0.0", port=5000)
+
