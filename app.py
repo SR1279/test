@@ -4,7 +4,6 @@ import json
 import threading
 import time
 import os
-import csv
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -12,8 +11,11 @@ app = Flask(__name__)
 
 URL = "https://platform-v2.ridges.ai/retrieval/top-agents"
 PARAMS = {"number_of_agents": 20}
-OUTPUT_FILE = "agent_id.json"
-LOG_FILE = "diff_log.csv"
+
+# Global variables to store data in memory
+agents_data = {}  # {agent_id: score}
+diff_log = []     # [{"timestamp": str, "total_diff": int}, ...]
+data_lock = threading.Lock()  # Thread safety
 
 
 def round_half_up(value: float) -> int:
@@ -22,26 +24,20 @@ def round_half_up(value: float) -> int:
 
 
 def load_existing_agents():
-    """Load existing agents from JSON file if it exists."""
-    try:
-        with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
-            return {a["agent_id"]: a["score"] for a in json.load(f)}
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    """Load existing agents from global variable."""
+    with data_lock:
+        return agents_data.copy()
 
 
 def append_log(timestamp: str, total_diff: int):
-    """Append total_diff and timestamp to CSV log."""
-    header_needed = not os.path.exists(LOG_FILE)
-    with open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        if header_needed:
-            writer.writerow(["timestamp", "total_diff"])
-        writer.writerow([timestamp, total_diff])
+    """Append total_diff and timestamp to global log."""
+    with data_lock:
+        diff_log.append({"timestamp": timestamp, "total_diff": total_diff})
 
 
 def fetch_and_save():
-    """Fetch new agents, compute total_diff, overwrite file, and log result."""
+    """Fetch new agents, compute total_diff, update global variables, and log result."""
+    global agents_data
     try:
         response = requests.get(URL, params=PARAMS, timeout=30)
         response.raise_for_status()
@@ -69,19 +65,15 @@ def fetch_and_save():
                 diff = int_score - threshold
                 total_diff += diff
 
-        # Overwrite file with only new agents
-        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-            json.dump(
-                [{"agent_id": aid, "score": score} for aid, score in new_agents.items()],
-                f,
-                indent=4,
-            )
+        # Update global variable with new agents
+        with data_lock:
+            agents_data = new_agents
 
         # Log result
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         append_log(timestamp, total_diff)
 
-        print(f"[{timestamp}] Saved {len(new_agents)} agents to {OUTPUT_FILE}")
+        print(f"[{timestamp}] Saved {len(new_agents)} agents to memory")
         print(f"  → Sum of (rounded_score - threshold) for new agents = {total_diff}")
 
     except Exception as e:
@@ -91,7 +83,7 @@ def fetch_and_save():
 def sleep_until_next_10min():
     """Sleep until the next exact 10-minute mark."""
     now = datetime.now()
-    next_minute = (now.minute // 10 + 1) * 10
+    next_minute = (now.minute // 10 + 6) * 10
     if next_minute >= 60:
         next_time = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
     else:
@@ -111,14 +103,12 @@ def background_task():
 @app.route("/")
 def index():
     """Frontend: show chart of total_diff over time."""
-    # Load CSV data
+    # Load data from global variable
     timestamps, diffs = [], []
-    if os.path.exists(LOG_FILE):
-        with open(LOG_FILE, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                timestamps.append(row["timestamp"])
-                diffs.append(int(row["total_diff"]))
+    with data_lock:
+        for entry in diff_log:
+            timestamps.append(entry["timestamp"])
+            diffs.append(entry["total_diff"])
 
     html = """
     <!DOCTYPE html>
